@@ -43,6 +43,7 @@ struct Peer {
 
 /// TS Packet chunker
 struct TSPacket {
+    buffer_size: usize,
     socket: TcpStream,
 
     rd: BytesMut,
@@ -84,7 +85,7 @@ impl Future for Peer {
     fn poll(&mut self) -> Poll<(), io::Error> {
         if !self.producer {
             loop {
-                if self.packets.wr.remaining_mut() < TSPacket::PACKET_SIZE {
+                if self.packets.wr.remaining_mut() < self.packets.buffer_size {
                     let _ = self.packets.poll_flush();
                 }
                 match self.rx.poll().unwrap() {
@@ -136,11 +137,9 @@ impl fmt::Display for Peer {
 }
 
 impl TSPacket {
-    const PACKET_SIZE: usize = 188 * 7;
-
-    // TODO: Add an option to tune
-    fn new(socket: TcpStream) -> Self {
+    fn new(socket: TcpStream, buffer_size: usize) -> Self {
         TSPacket {
+            buffer_size,
             socket,
             rd: BytesMut::new(),
             wr: BytesMut::new(),
@@ -149,7 +148,7 @@ impl TSPacket {
 
     /// Buffer a packet.
     fn buffer(&mut self, line: &[u8]) {
-        self.wr.reserve(Self::PACKET_SIZE * 4);
+        self.wr.reserve(self.buffer_size * 4);
         self.wr.put(line);
     }
 
@@ -168,7 +167,7 @@ impl TSPacket {
 
     fn fill_read_buf(&mut self) -> Poll<(), io::Error> {
         loop {
-            self.rd.reserve(Self::PACKET_SIZE * 4);
+            self.rd.reserve(self.buffer_size * 4);
             let n = try_ready!(self.socket.read_buf(&mut self.rd));
             if n == 0 {
                 return Ok(Async::Ready(()));
@@ -184,8 +183,8 @@ impl Stream for TSPacket {
     fn poll(&mut self) -> Poll<Option<Self::Item>, Self::Error> {
         let sock_closed = self.fill_read_buf()?.is_ready();
 
-        if self.rd.len() > Self::PACKET_SIZE {
-            let pkt = self.rd.split_to(Self::PACKET_SIZE);
+        if self.rd.len() > self.buffer_size {
+            let pkt = self.rd.split_to(self.buffer_size);
 
             return Ok(Async::Ready(Some(pkt)));
         }
@@ -198,8 +197,8 @@ impl Stream for TSPacket {
     }
 }
 
-fn setup(socket: TcpStream, state: Rc<RefCell<Shared>>, producer: bool) {
-    let packets = TSPacket::new(socket);
+fn setup(socket: TcpStream, state: Rc<RefCell<Shared>>, producer: bool, buffer_size: usize) {
+    let packets = TSPacket::new(socket, buffer_size);
 
     let cons = Peer::new(state, packets, producer);
 
@@ -223,6 +222,9 @@ struct Config {
     #[structopt(short = "C", help = "Set the consumer host", default_value = "127.0.0.1")]
     /// Set the producer host
     consumer_host: IpAddr,
+
+    #[structopt(short = "b", help = "Set the packet buffer size", default_value = "1316")]
+    buffer: usize,
 }
 
 pub fn main() {
@@ -238,10 +240,12 @@ pub fn main() {
     let l_prod = TcpListener::bind(&(cfg.producer_host, cfg.port).into()).unwrap();
     let l_cons = TcpListener::bind(&(cfg.consumer_host, cfg.port + 1).into()).unwrap();
 
+    let buffer_size = cfg.buffer;
+
     let srv_prod = l_prod
         .incoming()
         .for_each(move |socket| {
-            setup(socket, prod_state.clone(), true);
+            setup(socket, prod_state.clone(), true, buffer_size.clone());
             Ok(())
         })
         .map_err(|err| {
@@ -251,7 +255,7 @@ pub fn main() {
     let srv_cons = l_cons
         .incoming()
         .for_each(move |socket| {
-            setup(socket, cons_state.clone(), false);
+            setup(socket, cons_state.clone(), false, buffer_size.clone());
             Ok(())
         })
         .map_err(|err| {
