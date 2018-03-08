@@ -11,7 +11,6 @@ extern crate structopt;
 
 use structopt::StructOpt;
 
-use tokio::executor::current_thread;
 use tokio::net::{TcpListener, TcpStream};
 use tokio_io::AsyncRead;
 use futures::prelude::*;
@@ -19,10 +18,9 @@ use futures::sync::mpsc;
 use bytes::{BufMut, Bytes, BytesMut};
 
 use std::io::{self, Write};
-use std::cell::RefCell;
 use std::collections::HashMap;
 use std::net::SocketAddr;
-use std::rc::Rc;
+use std::sync::{Mutex, Arc};
 
 type Tx = mpsc::UnboundedSender<Bytes>;
 type Rx = mpsc::UnboundedReceiver<Bytes>;
@@ -33,7 +31,7 @@ struct Shared {
 
 struct Peer {
     packets: TSPacket,
-    state: Rc<RefCell<Shared>>,
+    state: Arc<Mutex<Shared>>,
 
     rx: Rx,
 
@@ -59,13 +57,13 @@ impl Shared {
 }
 
 impl Peer {
-    fn new(state: Rc<RefCell<Shared>>, packets: TSPacket, producer: bool) -> Peer {
+    fn new(state: Arc<Mutex<Shared>>, packets: TSPacket, producer: bool) -> Peer {
         let addr = packets.socket.peer_addr().unwrap();
 
         let (tx, rx) = mpsc::unbounded();
 
         if !producer {
-            state.borrow_mut().peers.insert(addr, tx);
+            state.lock().unwrap().peers.insert(addr, tx);
         }
 
         Peer {
@@ -102,7 +100,7 @@ impl Future for Peer {
                 if let Some(packet) = pkt {
                     let packet = packet.freeze();
 
-                    for (_addr, tx) in &self.state.borrow().peers {
+                    for (_addr, tx) in &self.state.lock().unwrap().peers {
                         tx.unbounded_send(packet.clone()).unwrap();
                     }
                 } else {
@@ -117,7 +115,7 @@ impl Future for Peer {
 
 impl Drop for Peer {
     fn drop(&mut self) {
-        self.state.borrow_mut().peers.remove(&self.addr);
+        self.state.lock().unwrap().peers.remove(&self.addr);
 
         eprintln!("Dropping {}", self);
     }
@@ -197,14 +195,14 @@ impl Stream for TSPacket {
     }
 }
 
-fn setup(socket: TcpStream, state: Rc<RefCell<Shared>>, producer: bool, buffer_size: usize) {
+fn setup(socket: TcpStream, state: Arc<Mutex<Shared>>, producer: bool, buffer_size: usize) {
     let packets = TSPacket::new(socket, buffer_size);
 
     let cons = Peer::new(state, packets, producer);
 
     eprintln!("Adding {}", cons);
 
-    current_thread::spawn(cons.map_err(|e| println!("FAIL {:?}", e)));
+    tokio::spawn(cons.map_err(|e| println!("FAIL {:?}", e)));
 }
 
 use std::net::IpAddr;
@@ -230,7 +228,7 @@ struct Config {
 pub fn main() {
     pretty_env_logger::init().unwrap();
 
-    let state = Rc::new(RefCell::new(Shared::new()));
+    let state = Arc::new(Mutex::new(Shared::new()));
 
     let prod_state = state.clone();
     let cons_state = state.clone();
@@ -262,10 +260,8 @@ pub fn main() {
             eprintln!("consumer accept error = {:?}", err);
         });
 
-    current_thread::run(|_| {
-        current_thread::spawn(srv_cons);
-        current_thread::spawn(srv_prod);
-
-        eprintln!("Server Running");
-    });
+    tokio::run(futures::future::lazy(|| {
+        tokio::spawn(srv_prod);
+        srv_cons
+    }));
 }
