@@ -191,7 +191,6 @@ impl Stream for TSPacket {
         }
 
         if sock_closed {
-            println!("CLOSED?");
             Ok(Async::Ready(None))
         } else {
             Ok(Async::NotReady)
