@@ -143,20 +143,20 @@ impl fmt::Display for Peer {
 }
 
 impl TSPacket {
-    const PACKET_SIZE: usize = 188;
+    const PACKET_SIZE: usize = 188 * 7;
 
     // TODO: Add an option to tune
     fn new(socket: TcpStream) -> Self {
         TSPacket {
             socket,
             rd: BytesMut::new(),
-            wr: BytesMut::with_capacity(Self::PACKET_SIZE * 2),
+            wr: BytesMut::new(),
         }
     }
 
     /// Buffer a packet.
     fn buffer(&mut self, line: &[u8]) {
-        self.wr.reserve(1024);
+        self.wr.reserve(Self::PACKET_SIZE * 4);
         self.wr.put(line);
     }
 
