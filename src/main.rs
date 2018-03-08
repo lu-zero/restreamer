@@ -1,10 +1,10 @@
+extern crate bytes;
 #[macro_use]
 extern crate futures;
+extern crate pretty_env_logger;
 extern crate tokio;
 #[macro_use]
 extern crate tokio_io;
-extern crate bytes;
-extern crate pretty_env_logger;
 
 #[macro_use]
 extern crate structopt;
@@ -13,10 +13,10 @@ use structopt::StructOpt;
 
 use tokio::executor::current_thread;
 use tokio::net::{TcpListener, TcpStream};
-use tokio_io::{AsyncRead};
+use tokio_io::AsyncRead;
 use futures::prelude::*;
 use futures::sync::mpsc;
-use bytes::{BytesMut, Bytes, BufMut};
+use bytes::{BufMut, Bytes, BytesMut};
 
 use std::io::{self, Write};
 use std::cell::RefCell;
@@ -52,16 +52,13 @@ struct TSPacket {
 impl Shared {
     fn new() -> Self {
         Shared {
-            peers: HashMap::new()
+            peers: HashMap::new(),
         }
     }
 }
 
 impl Peer {
-    fn new(state: Rc<RefCell<Shared>>,
-           packets: TSPacket,
-           producer: bool) -> Peer
-    {
+    fn new(state: Rc<RefCell<Shared>>, packets: TSPacket, producer: bool) -> Peer {
         let addr = packets.socket.peer_addr().unwrap();
 
         let (tx, rx) = mpsc::unbounded();
@@ -99,10 +96,8 @@ impl Future for Peer {
             }
 
             let _ = self.packets.poll_flush()?;
-
         } else {
             while let Async::Ready(pkt) = self.packets.poll()? {
-
                 if let Some(packet) = pkt {
                     let packet = packet.freeze();
 
@@ -121,8 +116,7 @@ impl Future for Peer {
 
 impl Drop for Peer {
     fn drop(&mut self) {
-        self.state.borrow_mut()
-            .peers.remove(&self.addr);
+        self.state.borrow_mut().peers.remove(&self.addr);
 
         eprintln!("Dropping {}", self);
     }
@@ -133,12 +127,11 @@ use std::fmt;
 impl fmt::Display for Peer {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         let name = if self.producer {
-                   "Producer"
-               } else {
-                   "Consumer"
-               };
-        write!(f, "{} ({:?})", name,
-               self.addr)
+            "Producer"
+        } else {
+            "Consumer"
+        };
+        write!(f, "{} ({:?})", name, self.addr)
     }
 }
 
@@ -175,7 +168,6 @@ impl TSPacket {
 
     fn fill_read_buf(&mut self) -> Poll<(), io::Error> {
         loop {
-
             self.rd.reserve(Self::PACKET_SIZE * 4);
             let n = try_ready!(self.socket.read_buf(&mut self.rd));
             if n == 0 {
@@ -217,7 +209,6 @@ fn setup(socket: TcpStream, state: Rc<RefCell<Shared>>, producer: bool) {
     current_thread::spawn(cons.map_err(|e| println!("FAIL {:?}", e)));
 }
 
-
 use std::net::IpAddr;
 
 #[derive(StructOpt, Debug)]
@@ -248,21 +239,25 @@ pub fn main() {
     let l_prod = TcpListener::bind(&(cfg.producer_host, cfg.port).into()).unwrap();
     let l_cons = TcpListener::bind(&(cfg.consumer_host, cfg.port + 1).into()).unwrap();
 
-    let srv_prod = l_prod.incoming().for_each(move |socket| {
-        setup(socket, prod_state.clone(), true);
-        Ok(())
-    })
-    .map_err(|err| {
-        eprintln!("producer accept error = {:?}", err);
-    });
+    let srv_prod = l_prod
+        .incoming()
+        .for_each(move |socket| {
+            setup(socket, prod_state.clone(), true);
+            Ok(())
+        })
+        .map_err(|err| {
+            eprintln!("producer accept error = {:?}", err);
+        });
 
-    let srv_cons = l_cons.incoming().for_each(move |socket| {
-        setup(socket, cons_state.clone(), false);
-        Ok(())
-    })
-    .map_err(|err| {
-        eprintln!("consumer accept error = {:?}", err);
-    });
+    let srv_cons = l_cons
+        .incoming()
+        .for_each(move |socket| {
+            setup(socket, cons_state.clone(), false);
+            Ok(())
+        })
+        .map_err(|err| {
+            eprintln!("consumer accept error = {:?}", err);
+        });
 
     current_thread::run(|_| {
         current_thread::spawn(srv_cons);
