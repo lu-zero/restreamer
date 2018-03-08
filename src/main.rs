@@ -6,6 +6,11 @@ extern crate tokio_io;
 extern crate bytes;
 extern crate pretty_env_logger;
 
+#[macro_use]
+extern crate structopt;
+
+use structopt::StructOpt;
+
 use tokio::executor::current_thread;
 use tokio::net::{TcpListener, TcpStream};
 use tokio_io::{AsyncRead};
@@ -197,6 +202,24 @@ fn setup(socket: TcpStream, state: Rc<RefCell<Shared>>, producer: bool) {
     current_thread::spawn(cons);
 }
 
+
+use std::net::IpAddr;
+
+#[derive(StructOpt, Debug)]
+#[structopt()]
+struct Config {
+    #[structopt(short = "p", long = "port", help = "Set listening ports", default_value = "12345")]
+    /// Set the listening ports, consumer ports is ${producer port +1}
+    port: u16,
+    #[structopt(short = "P", help = "Set the producer host", default_value = "127.0.0.1")]
+    /// Set the producer host
+    producer_host: IpAddr,
+
+    #[structopt(short = "C", help = "Set the consumer host", default_value = "127.0.0.1")]
+    /// Set the producer host
+    consumer_host: IpAddr,
+}
+
 pub fn main() {
     pretty_env_logger::init().unwrap();
 
@@ -205,11 +228,10 @@ pub fn main() {
     let prod_state = state.clone();
     let cons_state = state.clone();
 
-    let prod_addr = "127.0.0.1:12345".parse().unwrap();
-    let cons_addr = "127.0.0.1:54321".parse().unwrap();
+    let cfg = Config::from_args();
 
-    let l_prod = TcpListener::bind(&prod_addr).unwrap();
-    let l_cons = TcpListener::bind(&cons_addr).unwrap();
+    let l_prod = TcpListener::bind(&(cfg.producer_host, cfg.port).into()).unwrap();
+    let l_cons = TcpListener::bind(&(cfg.consumer_host, cfg.port + 1).into()).unwrap();
 
     let srv_prod = l_prod.incoming().for_each(move |socket| {
         setup(socket, prod_state.clone(), true);
