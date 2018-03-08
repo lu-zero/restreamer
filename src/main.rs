@@ -215,13 +215,13 @@ struct Config {
     #[structopt(short = "p", long = "port", help = "Set listening ports", default_value = "12345")]
     /// Set the listening ports, consumer ports is ${producer port +1}
     port: u16,
-    #[structopt(short = "P", help = "Set the producer host", default_value = "127.0.0.1")]
+    #[structopt(short = "I", help = "Set the input host", default_value = "127.0.0.1")]
     /// Set the producer host
-    producer_host: IpAddr,
+    input_host: IpAddr,
 
-    #[structopt(short = "C", help = "Set the consumer host", default_value = "127.0.0.1")]
+    #[structopt(short = "O", help = "Set the output host", default_value = "127.0.0.1")]
     /// Set the producer host
-    consumer_host: IpAddr,
+    output_host: IpAddr,
 
     #[structopt(short = "b", help = "Set the packet buffer size", default_value = "1316")]
     buffer: usize,
@@ -237,8 +237,8 @@ pub fn main() {
 
     let cfg = Config::from_args();
 
-    let l_prod = TcpListener::bind(&(cfg.producer_host, cfg.port).into()).unwrap();
-    let l_cons = TcpListener::bind(&(cfg.consumer_host, cfg.port + 1).into()).unwrap();
+    let l_prod = TcpListener::bind(&(cfg.input_host, cfg.port).into()).unwrap();
+    let l_cons = TcpListener::bind(&(cfg.output_host, cfg.port + 1).into()).unwrap();
 
     let buffer_size = cfg.buffer;
 
