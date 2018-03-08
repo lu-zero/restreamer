@@ -121,9 +121,24 @@ impl Future for Peer {
 
 impl Drop for Peer {
     fn drop(&mut self) {
-        eprintln!("Dropping {:?}", self.addr);
-        self.state.borrow_mut().peers
-            .remove(&self.addr);
+        self.state.borrow_mut()
+            .peers.remove(&self.addr);
+
+        eprintln!("Dropping {}", self);
+    }
+}
+
+use std::fmt;
+
+impl fmt::Display for Peer {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        let name = if self.producer {
+                   "Producer"
+               } else {
+                   "Consumer"
+               };
+        write!(f, "{} ({:?})", name,
+               self.addr)
     }
 }
 
@@ -195,11 +210,11 @@ impl Stream for TSPacket {
 fn setup(socket: TcpStream, state: Rc<RefCell<Shared>>, producer: bool) {
     let packets = TSPacket::new(socket);
 
-    eprintln!("Adding {:?}", packets.socket.peer_addr().unwrap());
-    let cons = Peer::new(state, packets, producer)
-        .map_err(|e| println!("FAIL {:?}", e));
+    let cons = Peer::new(state, packets, producer);
 
-    current_thread::spawn(cons);
+    eprintln!("Adding {}", cons);
+
+    current_thread::spawn(cons.map_err(|e| println!("FAIL {:?}", e)));
 }
 
 
@@ -253,6 +268,6 @@ pub fn main() {
         current_thread::spawn(srv_cons);
         current_thread::spawn(srv_prod);
 
-        println!("server running");
+        eprintln!("Server Running");
     });
 }
