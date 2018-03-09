@@ -1,5 +1,7 @@
 # Simple restreamer
 
+[![LICENSE](https://img.shields.io/badge/license-GPL-blue.svg)](COPYING)
+
 Based on [tokio](tokio.rs) `chat.rs` example.
 
 ## Usage
