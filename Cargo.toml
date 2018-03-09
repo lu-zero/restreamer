@@ -2,6 +2,7 @@
 name = "restream"
 version = "0.1.0"
 authors = ["Luca Barbato <lu_zero@gentoo.org>"]
+license = "GPL-2.0-or-later"
 
 [dependencies]
 bytes = "0.4.6"

@@ -25,3 +25,7 @@ OPTIONS:
     -O <output_host>        Set the output host [default: 127.0.0.1]
     -p, --port <port>       Set listening ports [default: 12345]
 ```
+
+## Credits
+
+Thanks to [TodoStreaming](http://www.todostreaming.es) for sponsoring this experiment.
