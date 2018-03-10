@@ -11,6 +11,7 @@ extern crate structopt;
 
 use structopt::StructOpt;
 
+use tokio::runtime::Runtime;
 use tokio::net::{TcpListener, TcpStream};
 use tokio_io::AsyncRead;
 use futures::prelude::*;
@@ -231,6 +232,7 @@ pub fn main() {
     pretty_env_logger::init().unwrap();
 
     let state = Arc::new(Mutex::new(Shared::new()));
+    let mut rt = Runtime::new().unwrap();
 
     let prod_state = state.clone();
     let cons_state = state.clone();
@@ -262,8 +264,8 @@ pub fn main() {
             eprintln!("consumer accept error = {:?}", err);
         });
 
-    tokio::run(futures::future::lazy(|| {
-        tokio::spawn(srv_prod);
-        srv_cons
-    }));
+    rt.spawn(srv_prod);
+    rt.spawn(srv_cons);
+
+    rt.shutdown_on_idle().wait().unwrap();
 }
