@@ -15,6 +15,7 @@ use tokio::executor::current_thread;
 use tokio::net::{TcpListener, TcpStream};
 use tokio_io::AsyncRead;
 use futures::prelude::*;
+use futures::task;
 use futures::sync::mpsc;
 use bytes::{BufMut, Bytes, BytesMut};
 
@@ -84,16 +85,17 @@ impl Future for Peer {
 
     fn poll(&mut self) -> Poll<(), io::Error> {
         if !self.producer {
-            loop {
-                if self.packets.wr.remaining_mut() < self.packets.buffer_size {
-                    let _ = self.packets.poll_flush();
-                }
+            while self.packets.wr.remaining_mut() > 0 {
                 match self.rx.poll().unwrap() {
                     Async::Ready(Some(v)) => {
                         self.packets.buffer(&v);
                     }
                     _ => break,
                 }
+            }
+
+            if self.packets.wr.remaining_mut() <= 0 {
+                task::current().notify();
             }
 
             let _ = self.packets.poll_flush()?;
