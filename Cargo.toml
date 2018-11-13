@@ -6,8 +6,9 @@ license = "GPL-2.0-or-later"
 
 [dependencies]
 bytes = "0.4.6"
-tokio = { git="https://github.com/tokio-rs/tokio" }
-tokio-io = { git="https://github.com/tokio-rs/tokio" }
-futures = "0.1.18"
+tokio = "0.1"
+tokio-io = "0.1"
+tk-listen = "0.2"
+futures = "0.1"
 pretty_env_logger = "0.1"
 structopt = "0.2"
