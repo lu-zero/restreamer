@@ -9,6 +9,8 @@ extern crate tokio_io;
 #[macro_use]
 extern crate structopt;
 
+extern crate mio;
+
 use structopt::StructOpt;
 
 use tokio::runtime::Runtime;
@@ -18,6 +20,8 @@ use futures::prelude::*;
 use futures::task;
 use futures::sync::mpsc;
 use bytes::{BufMut, Bytes, BytesMut};
+
+use mio::unix::UnixReady;
 
 use std::io::{self, Write};
 use std::collections::HashMap;
@@ -97,7 +101,10 @@ impl Future for Peer {
                 task::current().notify();
             }
 
-            let _ = self.packets.poll_flush()?;
+            match self.packets.poll_flush()? {
+                Async::Ready(false) => return Ok(Async::Ready(())),
+                _ => (),
+            }
         } else {
             while let Async::Ready(pkt) = self.packets.poll()? {
                 if let Some(packet) = pkt {
@@ -154,7 +161,12 @@ impl TSPacket {
     }
 
     /// Flush the write buffer to the socket
-    fn poll_flush(&mut self) -> Poll<(), io::Error> {
+    fn poll_flush(&mut self) -> Poll<bool, io::Error> {
+        if let Async::Ready(val) = self.socket.poll_write_ready()? {
+            if UnixReady::from(val).is_hup() {
+                return Ok(Async::Ready(false));
+            }
+        }
         while !self.wr.is_empty() {
             let n = try_nb!(self.socket.write(&self.wr));
 
@@ -163,7 +175,7 @@ impl TSPacket {
             let _ = self.wr.split_to(n);
         }
 
-        Ok(Async::Ready(()))
+        Ok(Async::Ready(true))
     }
 
     fn fill_read_buf(&mut self) -> Poll<(), io::Error> {

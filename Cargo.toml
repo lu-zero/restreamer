@@ -6,6 +6,7 @@ license = "GPL-2.0-or-later"
 
 [dependencies]
 bytes = "0.4.6"
+mio = "0.6"
 tokio = "0.1"
 tokio-io = "0.1"
 tk-listen = "0.2"
