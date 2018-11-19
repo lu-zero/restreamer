@@ -10,6 +10,7 @@ extern crate tokio_io;
 extern crate structopt;
 
 extern crate mio;
+extern crate tk_listen;
 
 use structopt::StructOpt;
 
@@ -19,9 +20,12 @@ use tokio_io::AsyncRead;
 use futures::prelude::*;
 use futures::task;
 use futures::sync::mpsc;
+use futures::sync::oneshot;
 use bytes::{BufMut, Bytes, BytesMut};
 
 use mio::unix::UnixReady;
+use tk_listen::ListenExt;
+use std::time::Duration;
 
 use std::io::{self, Write};
 use std::collections::HashMap;
@@ -30,6 +34,10 @@ use std::sync::{Mutex, Arc};
 
 type Tx = mpsc::UnboundedSender<Bytes>;
 type Rx = mpsc::UnboundedReceiver<Bytes>;
+
+type OneShotTx = oneshot::Sender<()>;
+type OneShotRx = oneshot::Receiver<()>;
+type OneShotSharedRx = futures::future::Shared<oneshot::Receiver<()>>;
 
 struct Shared {
     peers: HashMap<SocketAddr, Tx>,
@@ -42,7 +50,7 @@ struct Peer {
     rx: Rx,
 
     addr: SocketAddr,
-    producer: bool,
+    producer: Option<OneShotTx>,
 }
 
 /// TS Packet chunker
@@ -63,12 +71,12 @@ impl Shared {
 }
 
 impl Peer {
-    fn new(state: Arc<Mutex<Shared>>, packets: TSPacket, producer: bool) -> Peer {
+    fn new(state: Arc<Mutex<Shared>>, packets: TSPacket, producer: Option<OneShotTx>) -> Peer {
         let addr = packets.socket.peer_addr().unwrap();
 
         let (tx, rx) = mpsc::unbounded();
 
-        if !producer {
+        if producer.is_none() {
             state.lock().unwrap().peers.insert(addr, tx);
         }
 
@@ -87,7 +95,7 @@ impl Future for Peer {
     type Error = io::Error;
 
     fn poll(&mut self) -> Poll<(), io::Error> {
-        if !self.producer {
+        if self.producer.is_none() {
             while self.packets.wr.remaining_mut() > 0 {
                 match self.rx.poll().unwrap() {
                     Async::Ready(Some(v)) => {
@@ -135,7 +143,7 @@ use std::fmt;
 
 impl fmt::Display for Peer {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        let name = if self.producer {
+        let name = if self.producer.is_some() {
             "Producer"
         } else {
             "Consumer"
@@ -210,7 +218,7 @@ impl Stream for TSPacket {
     }
 }
 
-fn setup(socket: TcpStream, state: Arc<Mutex<Shared>>, producer: bool, buffer_size: usize) {
+fn setup(socket: TcpStream, state: Arc<Mutex<Shared>>, producer: Option<OneShotTx>, buffer_size: usize) {
     let packets = TSPacket::new(socket, buffer_size);
 
     let cons = Peer::new(state, packets, producer);
@@ -218,6 +226,17 @@ fn setup(socket: TcpStream, state: Arc<Mutex<Shared>>, producer: bool, buffer_si
     eprintln!("Adding {}", cons);
 
     tokio::spawn(cons.map_err(|e| println!("FAIL {:?}", e)));
+}
+
+fn setup_producer(socket: TcpStream, state: Arc<Mutex<Shared>>, buffer_size: usize) -> OneShotSharedRx {
+    let (tx, rx) = oneshot::channel::<()>();
+    setup(socket, state, Some(tx), buffer_size);
+
+    rx.shared()
+}
+
+fn setup_consumer(socket: TcpStream, state: Arc<Mutex<Shared>>, buffer_size: usize) {
+    setup(socket, state, None, buffer_size);
 }
 
 use std::net::IpAddr;
@@ -247,37 +266,40 @@ pub fn main() {
     let mut rt = Runtime::new().unwrap();
 
     let prod_state = state.clone();
-    let cons_state = state.clone();
 
     let cfg = Config::from_args();
 
     let l_prod = TcpListener::bind(&(cfg.input_host, cfg.port).into()).unwrap();
-    let l_cons = TcpListener::bind(&(cfg.output_host, cfg.port + 1).into()).unwrap();
 
     let buffer_size = cfg.buffer;
 
     let srv_prod = l_prod
         .incoming()
-        .for_each(move |socket| {
-            setup(socket, prod_state.clone(), true, buffer_size.clone());
-            Ok(())
-        })
-        .map_err(|err| {
-            eprintln!("producer accept error = {:?}", err);
-        });
+        .sleep_on_error(Duration::from_millis(100))
+        .map(move |socket| {
+            let rx = setup_producer(socket, prod_state.clone(), buffer_size.clone());
 
-    let srv_cons = l_cons
-        .incoming()
-        .for_each(move |socket| {
-            setup(socket, cons_state.clone(), false, buffer_size.clone());
+            let l_cons = TcpListener::bind(&(cfg.output_host, cfg.port + 1).into()).unwrap();
+            let cons_state = state.clone();
+
+            let srv_cons = l_cons
+                .incoming()
+                .sleep_on_error(Duration::from_millis(100))
+                .map(move |socket| {
+                    setup_consumer(socket, cons_state.clone(), buffer_size.clone());
+
+                    Ok(())
+                })
+                .listen(1000)
+                .select(rx.clone().into_future().map(|_| ()).map_err(|_| ()));
+
+            tokio::spawn(srv_cons.map(|_| ()).map_err(|_| ()));
+
             Ok(())
         })
-        .map_err(|err| {
-            eprintln!("consumer accept error = {:?}", err);
-        });
+        .listen(1);
 
     rt.spawn(srv_prod);
-    rt.spawn(srv_cons);
 
     rt.shutdown_on_idle().wait().unwrap();
 }
