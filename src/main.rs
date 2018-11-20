@@ -21,6 +21,7 @@ use futures::prelude::*;
 use futures::task;
 use futures::sync::mpsc;
 use futures::sync::oneshot;
+use futures::future::IntoStream;
 use bytes::{BufMut, Bytes, BytesMut};
 
 use mio::unix::UnixReady;
@@ -37,7 +38,25 @@ type Rx = mpsc::UnboundedReceiver<Bytes>;
 
 type OneShotTx = oneshot::Sender<()>;
 type OneShotRx = oneshot::Receiver<()>;
-type OneShotSharedRx = futures::future::Shared<oneshot::Receiver<()>>;
+type OneShotSharedRx = futures::future::Shared<OneShotRx>;
+type OneShotStreamRx = IntoStream<futures::future::Shared<OneShotRx>>;
+
+enum Kind {
+    Consumer(OneShotStreamRx),
+    Producer(OneShotTx),
+}
+
+impl Kind {
+    fn is_producer(&self) -> bool {
+        match self {
+            Kind::Producer(_) => true,
+            _ => false
+        }
+    }
+    fn is_consumer(&self) -> bool {
+        !self.is_producer()
+    }
+}
 
 struct Shared {
     peers: HashMap<SocketAddr, Tx>,
@@ -50,7 +69,7 @@ struct Peer {
     rx: Rx,
 
     addr: SocketAddr,
-    producer: Option<OneShotTx>,
+    kind: Kind,
 }
 
 /// TS Packet chunker
@@ -71,12 +90,12 @@ impl Shared {
 }
 
 impl Peer {
-    fn new(state: Arc<Mutex<Shared>>, packets: TSPacket, producer: Option<OneShotTx>) -> Peer {
+    fn new(state: Arc<Mutex<Shared>>, packets: TSPacket, kind: Kind) -> Peer {
         let addr = packets.socket.peer_addr().unwrap();
 
         let (tx, rx) = mpsc::unbounded();
 
-        if producer.is_none() {
+        if kind.is_consumer() {
             state.lock().unwrap().peers.insert(addr, tx);
         }
 
@@ -85,7 +104,7 @@ impl Peer {
             state,
             rx,
             addr,
-            producer,
+            kind,
         }
     }
 }
@@ -95,12 +114,16 @@ impl Future for Peer {
     type Error = io::Error;
 
     fn poll(&mut self) -> Poll<(), io::Error> {
-        if self.producer.is_none() {
+        if let Kind::Consumer(ref mut rx) = self.kind {
             while self.packets.wr.remaining_mut() > 0 {
-                match self.rx.poll().unwrap() {
+                let rx = rx.by_ref().map(|_| Bytes::new()).map_err(|_| ());
+                match self.rx.by_ref()
+                    .select(rx)
+                    .poll().unwrap_or(Async::Ready(None)) {
                     Async::Ready(Some(v)) => {
                         self.packets.buffer(&v);
-                    }
+                    },
+                    Async::Ready(None) => return Ok(Async::Ready(())),
                     _ => break,
                 }
             }
@@ -143,7 +166,7 @@ use std::fmt;
 
 impl fmt::Display for Peer {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        let name = if self.producer.is_some() {
+        let name = if self.kind.is_producer() {
             "Producer"
         } else {
             "Consumer"
@@ -218,10 +241,10 @@ impl Stream for TSPacket {
     }
 }
 
-fn setup(socket: TcpStream, state: Arc<Mutex<Shared>>, producer: Option<OneShotTx>, buffer_size: usize) {
+fn setup(socket: TcpStream, state: Arc<Mutex<Shared>>, kind: Kind, buffer_size: usize) {
     let packets = TSPacket::new(socket, buffer_size);
 
-    let cons = Peer::new(state, packets, producer);
+    let cons = Peer::new(state, packets, kind);
 
     eprintln!("Adding {}", cons);
 
@@ -230,13 +253,15 @@ fn setup(socket: TcpStream, state: Arc<Mutex<Shared>>, producer: Option<OneShotT
 
 fn setup_producer(socket: TcpStream, state: Arc<Mutex<Shared>>, buffer_size: usize) -> OneShotSharedRx {
     let (tx, rx) = oneshot::channel::<()>();
-    setup(socket, state, Some(tx), buffer_size);
+
+    setup(socket, state, Kind::Producer(tx), buffer_size);
 
     rx.shared()
 }
 
-fn setup_consumer(socket: TcpStream, state: Arc<Mutex<Shared>>, buffer_size: usize) {
-    setup(socket, state, None, buffer_size);
+fn setup_consumer(socket: TcpStream, state: Arc<Mutex<Shared>>, rx: OneShotSharedRx, buffer_size: usize) {
+    let rx = rx.into_stream();
+    setup(socket, state, Kind::Consumer(rx), buffer_size);
 }
 
 use std::net::IpAddr;
@@ -281,12 +306,13 @@ pub fn main() {
 
             let l_cons = TcpListener::bind(&(cfg.output_host, cfg.port + 1).into()).unwrap();
             let cons_state = state.clone();
+            let cons_rx = rx.clone();
 
             let srv_cons = l_cons
                 .incoming()
                 .sleep_on_error(Duration::from_millis(100))
                 .map(move |socket| {
-                    setup_consumer(socket, cons_state.clone(), buffer_size.clone());
+                    setup_consumer(socket, cons_state.clone(), cons_rx.clone(), buffer_size.clone());
 
                     Ok(())
                 })
